@@ -1,0 +1,402 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+
+--// SETTINGS
+local TOTAL_TIME = 300   -- total loading time in seconds (5 minutes)
+local FAST_TIME  = 20    -- seconds it takes to reach 95%
+local FAST_END   = 0.95  -- where the fast part stops
+local SCRIPT_URL = "https://raw.githubusercontent.com/bobloscript/robscript/main/AnimeAdventures"
+local CARD_W, CARD_H = 400, 180
+local BAR_W,  BAR_H  = 320, 8
+local GAME_NAME = "ANIME ADVENTURES"
+local TIPS = {
+	"Place your units along the path to hold the line",
+	"Upgrade units to unlock their full power",
+	"Evolve your units to reach their final form",
+	"Team up with friends to clear harder stages",
+	"Spend your gems wisely on banners",
+	"Positioning is everything",
+}
+
+local WHITE = Color3.new(1, 1, 1)
+local BLACK = Color3.new(0, 0, 0)
+local GRAY  = Color3.fromRGB(150, 150, 150)
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+--// ROOT (no full-screen cover, only the card)
+local gui = Instance.new("ScreenGui")
+gui.Name = "LoadingCard"
+gui.IgnoreGuiInset = true
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+local card = Instance.new("CanvasGroup")
+card.AnchorPoint = Vector2.new(0.5, 0.5)
+card.Position = UDim2.fromScale(0.5, 0.5)
+card.Size = UDim2.fromOffset(CARD_W, CARD_H)
+card.BackgroundColor3 = BLACK
+card.BackgroundTransparency = 0.04
+card.BorderSizePixel = 0
+card.GroupTransparency = 1
+card.Parent = gui
+
+local cardScale = Instance.new("UIScale")
+cardScale.Scale = 0.8
+cardScale.Parent = card
+
+Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
+
+local cardStroke = Instance.new("UIStroke")
+cardStroke.Color = WHITE
+cardStroke.Thickness = 1.5
+cardStroke.Parent = card
+
+--// SCANLINE (soft light sweeping down the card)
+local scan = Instance.new("Frame")
+scan.Size = UDim2.new(1, 0, 0, 50)
+scan.BackgroundColor3 = WHITE
+scan.BorderSizePixel = 0
+scan.ZIndex = 1
+scan.Parent = card
+local scanGrad = Instance.new("UIGradient")
+scanGrad.Rotation = 90
+scanGrad.Transparency = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(0.5, 0.9),
+	NumberSequenceKeypoint.new(1, 1),
+})
+scanGrad.Parent = scan
+
+--// FLOATING PARTICLES
+local particles = {}
+for i = 1, 14 do
+	local f = Instance.new("Frame")
+	local s = math.random(2, 3)
+	f.Size = UDim2.fromOffset(s, s)
+	f.BackgroundColor3 = WHITE
+	f.BorderSizePixel = 0
+	f.ZIndex = 2
+	f.Parent = card
+	particles[i] = {
+		frame = f,
+		x = math.random(10, CARD_W - 10),
+		y = math.random(0, CARD_H),
+		speed = math.random(10, 28),
+		sway = math.random() * 6.28,
+	}
+end
+
+--// CORNER BRACKETS
+local bracketParts = {}
+local function makeCorner(ax, ay)
+	local inset = 9
+	local len = 14
+	local px = ax == 0 and inset or -inset
+	local py = ay == 0 and inset or -inset
+
+	local h = Instance.new("Frame")
+	h.AnchorPoint = Vector2.new(ax, ay)
+	h.Position = UDim2.new(ax, px, ay, py)
+	h.Size = UDim2.fromOffset(len, 2)
+	h.BackgroundColor3 = WHITE
+	h.BorderSizePixel = 0
+	h.ZIndex = 3
+	h.Parent = card
+
+	local v = Instance.new("Frame")
+	v.AnchorPoint = Vector2.new(ax, ay)
+	v.Position = UDim2.new(ax, px, ay, py)
+	v.Size = UDim2.fromOffset(2, len)
+	v.BackgroundColor3 = WHITE
+	v.BorderSizePixel = 0
+	v.ZIndex = 3
+	v.Parent = card
+
+	table.insert(bracketParts, h)
+	table.insert(bracketParts, v)
+end
+makeCorner(0, 0)
+makeCorner(1, 0)
+makeCorner(0, 1)
+makeCorner(1, 1)
+
+--// SPINNING ICON (two diamonds, opposite rotation)
+local iconOuter = Instance.new("Frame")
+iconOuter.AnchorPoint = Vector2.new(0.5, 0.5)
+iconOuter.Position = UDim2.new(0.5, 0, 0, 32)
+iconOuter.Size = UDim2.fromOffset(22, 22)
+iconOuter.BackgroundTransparency = 1
+iconOuter.ZIndex = 3
+iconOuter.Parent = card
+local iconStroke = Instance.new("UIStroke")
+iconStroke.Color = WHITE
+iconStroke.Thickness = 1.5
+iconStroke.Parent = iconOuter
+
+local iconInner = Instance.new("Frame")
+iconInner.AnchorPoint = Vector2.new(0.5, 0.5)
+iconInner.Position = UDim2.new(0.5, 0, 0, 32)
+iconInner.Size = UDim2.fromOffset(8, 8)
+iconInner.BackgroundColor3 = WHITE
+iconInner.BorderSizePixel = 0
+iconInner.ZIndex = 3
+iconInner.Parent = card
+
+--// TITLE (typewriter reveal)
+local finished = false
+
+-- Font options to try: Bangers (comic/anime), Michroma (techy), Oswald, Fantasy, Arcade, GothamBlack
+local TITLE_FONT = Enum.Font.Bangers
+local TITLE_SIZE = 26
+local TITLE_POS = UDim2.new(0.5, 0, 0, 64)
+
+-- shadow layer (gray, offset behind the title, used for depth + glitch effect)
+local titleShadow = Instance.new("TextLabel")
+titleShadow.AnchorPoint = Vector2.new(0.5, 0.5)
+titleShadow.Position = TITLE_POS + UDim2.fromOffset(2, 2)
+titleShadow.Size = UDim2.fromOffset(CARD_W - 40, 28)
+titleShadow.BackgroundTransparency = 1
+titleShadow.Text = GAME_NAME
+titleShadow.TextColor3 = Color3.fromRGB(90, 90, 90)
+titleShadow.Font = TITLE_FONT
+titleShadow.TextSize = TITLE_SIZE
+titleShadow.MaxVisibleGraphemes = 0
+titleShadow.ZIndex = 3
+titleShadow.Parent = card
+
+local title = Instance.new("TextLabel")
+title.AnchorPoint = Vector2.new(0.5, 0.5)
+title.Position = TITLE_POS
+title.Size = UDim2.fromOffset(CARD_W - 40, 28)
+title.BackgroundTransparency = 1
+title.Text = GAME_NAME
+title.TextColor3 = WHITE
+title.Font = TITLE_FONT
+title.TextSize = TITLE_SIZE
+title.MaxVisibleGraphemes = 0
+title.ZIndex = 4
+title.Parent = card
+
+-- light sweep that travels across the letters
+local titleGrad = Instance.new("UIGradient")
+titleGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 110, 110)),
+	ColorSequenceKeypoint.new(0.5, WHITE),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(110, 110, 110)),
+})
+titleGrad.Parent = title
+
+-- glitch: every few seconds the shadow jumps and the title jitters for a split second
+task.spawn(function()
+	task.wait(2.5)
+	while not finished do
+		task.wait(math.random(30, 60) / 10)
+		if finished then break end
+		for _ = 1, 4 do
+			local dx = math.random(-4, 4)
+			titleShadow.Position = TITLE_POS + UDim2.fromOffset(dx, math.random(-2, 2))
+			title.Position = TITLE_POS + UDim2.fromOffset(-dx / 2, 0)
+			task.wait(0.04)
+		end
+		titleShadow.Position = TITLE_POS + UDim2.fromOffset(2, 2)
+		title.Position = TITLE_POS
+	end
+end)
+
+--// TIP (fades between tips)
+local tip = Instance.new("TextLabel")
+tip.AnchorPoint = Vector2.new(0.5, 0.5)
+tip.Position = UDim2.new(0.5, 0, 0, 88)
+tip.Size = UDim2.fromOffset(CARD_W - 40, 14)
+tip.BackgroundTransparency = 1
+tip.Text = TIPS[1]
+tip.TextColor3 = GRAY
+tip.Font = Enum.Font.Gotham
+tip.TextSize = 12
+tip.TextTransparency = 1
+tip.ZIndex = 3
+tip.Parent = card
+
+--// PROGRESS BAR
+local barOutline = Instance.new("Frame")
+barOutline.AnchorPoint = Vector2.new(0.5, 0.5)
+barOutline.Position = UDim2.new(0.5, 0, 0, 116)
+barOutline.Size = UDim2.fromOffset(BAR_W, BAR_H)
+barOutline.BackgroundTransparency = 1
+barOutline.ZIndex = 3
+barOutline.Parent = card
+local barStroke = Instance.new("UIStroke")
+barStroke.Color = WHITE
+barStroke.Thickness = 1
+barStroke.Parent = barOutline
+
+local fill = Instance.new("Frame")
+fill.Position = UDim2.fromOffset(2, 2)
+fill.Size = UDim2.new(0, 0, 1, -4)
+fill.BackgroundColor3 = WHITE
+fill.BorderSizePixel = 0
+fill.ClipsDescendants = true
+fill.ZIndex = 4
+fill.Parent = barOutline
+
+-- shimmer streak running across the fill
+local shimmer = Instance.new("Frame")
+shimmer.Size = UDim2.new(0, 50, 1, 0)
+shimmer.BackgroundColor3 = Color3.fromRGB(110, 110, 110)
+shimmer.BorderSizePixel = 0
+shimmer.ZIndex = 5
+shimmer.Parent = fill
+local shimmerGrad = Instance.new("UIGradient")
+shimmerGrad.Transparency = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(0.5, 0.2),
+	NumberSequenceKeypoint.new(1, 1),
+})
+shimmerGrad.Parent = shimmer
+
+--// LABELS
+local percent = Instance.new("TextLabel")
+percent.Position = UDim2.fromOffset((CARD_W - BAR_W) / 2, 132)
+percent.Size = UDim2.fromOffset(100, 16)
+percent.BackgroundTransparency = 1
+percent.Text = "0%"
+percent.TextColor3 = WHITE
+percent.Font = Enum.Font.GothamMedium
+percent.TextSize = 12
+percent.TextXAlignment = Enum.TextXAlignment.Left
+percent.ZIndex = 3
+percent.Parent = card
+
+local status = Instance.new("TextLabel")
+status.AnchorPoint = Vector2.new(1, 0)
+status.Position = UDim2.fromOffset(CARD_W - (CARD_W - BAR_W) / 2, 132)
+status.Size = UDim2.fromOffset(160, 16)
+status.BackgroundTransparency = 1
+status.Text = "LOADING"
+status.TextColor3 = GRAY
+status.Font = Enum.Font.Gotham
+status.TextSize = 11
+status.TextXAlignment = Enum.TextXAlignment.Right
+status.ZIndex = 3
+status.Parent = card
+
+--// INTRO
+TweenService:Create(card, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	GroupTransparency = 0,
+}):Play()
+TweenService:Create(cardScale, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+	Scale = 1,
+}):Play()
+
+task.spawn(function()
+	task.wait(0.4)
+	for i = 1, #GAME_NAME do
+		title.MaxVisibleGraphemes = i
+		titleShadow.MaxVisibleGraphemes = i
+		task.wait(0.05)
+	end
+end)
+
+-- rotating tips with fade
+task.spawn(function()
+	local fadeInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quad)
+	task.wait(1)
+	local index = 1
+	while not finished do
+		tip.Text = TIPS[index]
+		TweenService:Create(tip, fadeInfo, { TextTransparency = 0 }):Play()
+		task.wait(3.6)
+		if finished then break end
+		TweenService:Create(tip, fadeInfo, { TextTransparency = 1 }):Play()
+		task.wait(0.45)
+		index = index % #TIPS + 1
+	end
+end)
+
+--// PROGRESS: fast ease-out to 95%, then a slow crawl to 100%
+local function progressAt(t)
+	if t <= FAST_TIME then
+		local a = t / FAST_TIME
+		return FAST_END * (1 - (1 - a) ^ 3)
+	end
+	local a = math.clamp((t - FAST_TIME) / (TOTAL_TIME - FAST_TIME), 0, 1)
+	return FAST_END + (1 - FAST_END) * a
+end
+
+--// MAIN LOOP
+local startTime = os.clock()
+local connection
+
+connection = RunService.RenderStepped:Connect(function(dt)
+	local t = os.clock() - startTime
+	local p = progressAt(t)
+
+	-- bar
+	fill.Size = UDim2.new(p, -4 * p, 1, -4)
+	percent.Text = string.format("%d%%", math.floor(p * 100))
+
+	-- shimmer sweep
+	local fillW = (BAR_W - 4) * p
+	shimmer.Position = UDim2.fromOffset((t * 160) % (fillW + 100) - 50, 0)
+
+	-- status text
+	if p < FAST_END then
+		status.Text = "LOADING" .. string.rep(".", math.floor(t * 2) % 4)
+	else
+		status.Text = "FINALIZING" .. string.rep(".", math.floor(t * 2) % 4)
+	end
+
+	-- title light sweep
+	titleGrad.Offset = Vector2.new(((t * 0.5) % 2) - 1, 0)
+
+	-- icon spin
+	iconOuter.Rotation = (t * 90) % 360 + 45
+	iconInner.Rotation = -(t * 180) % 360 + 45
+
+	-- pulsing outline + brackets
+	local pulse = 0.5 + 0.5 * math.sin(t * 2.2)
+	cardStroke.Transparency = 0.1 + 0.35 * pulse
+	for _, part in ipairs(bracketParts) do
+		part.BackgroundTransparency = 0.55 * (1 - pulse)
+	end
+
+	-- scanline
+	scan.Position = UDim2.fromOffset(0, (t * 70) % (CARD_H + 50) - 50)
+
+	-- particles
+	for _, pt in ipairs(particles) do
+		pt.y -= pt.speed * dt
+		if pt.y < -4 then
+			pt.y = CARD_H + 4
+			pt.x = math.random(10, CARD_W - 10)
+		end
+		local sx = pt.x + math.sin(t + pt.sway) * 6
+		pt.frame.Position = UDim2.fromOffset(sx, pt.y)
+		pt.frame.BackgroundTransparency = 1 - 0.55 * (pt.y / CARD_H)
+	end
+
+	-- finished
+	if p >= 1 and not finished then
+		finished = true
+		connection:Disconnect()
+		percent.Text = "100%"
+		status.Text = "READY"
+		status.TextColor3 = WHITE
+
+		task.delay(0.6, function()
+			local out = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			TweenService:Create(card, out, { GroupTransparency = 1 }):Play()
+			TweenService:Create(cardScale, out, { Scale = 1.08 }):Play()
+			task.wait(0.6)
+			gui:Destroy()
+
+		
